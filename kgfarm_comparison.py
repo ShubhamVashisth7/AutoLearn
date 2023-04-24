@@ -1,27 +1,34 @@
 import os
+import time
+import signal
+import psutil
 import warnings
 import numpy as np
 import pandas as pd
 import pandas.errors
-from sklearn.tree import tree
-from sklearn.metrics import f1_score
 from scipy.stats.stats import pearsonr
-from sklearn.svm import SVC, LinearSVC
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import StratifiedKFold
 from scipy.spatial.distance import squareform, pdist
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import f1_score, r2_score, mean_squared_error
+from sklearn.linear_model import Ridge, RandomizedLasso, ElasticNet
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
-from sklearn.linear_model import Ridge, RandomizedLasso, LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, GradientBoostingRegressor, \
+    RandomForestRegressor
 from clean import clean
+
+pd.set_option('display.max_rows', 10000)
+pd.set_option('display.max_columns', 100)
+pd.set_option('display.max_colwidth', 10)
+
 warnings.filterwarnings('ignore')
-RANDOM_STATE = 7
+RANDOM_STATE = 30
 np.random.seed(RANDOM_STATE)
 N_FOLDS = 5
-
+TIMEOUT = 3 * 60 * 60  # 3 hours
 clf = Ridge(alpha=1.0)
 cnt = 0
 ans = []
@@ -181,7 +188,11 @@ def linear(TR, TST, fold):
 def nonlinear(TR, TST, fold):
     a, b = TR.shape
     c, d = TST.shape
-    dataset = pd.read_csv('sonar_nonlinear_correlated_{}.csv'.format(fold), header=None)
+    try:
+        dataset = pd.read_csv('sonar_nonlinear_correlated_{}.csv'.format(fold), header=None)
+    except pandas.errors.EmptyDataError:
+        print 'no non-linearly correlated features'
+        return
     val = dataset.as_matrix(columns=None)
     aa, bb = val.shape
 
@@ -332,141 +343,221 @@ def rank(X1, y):
         pass
 
 
+class TimeoutException(Exception):
+    pass
+
+
+def timeout_handler(signum, frame):
+    raise TimeoutException('AutoLearn took more than {} hours'.format(float(TIMEOUT/60/60)))
+
+
 if __name__ == '__main__':
     clean()
-    df = pd.read_csv('lfe_datasets/Sonar.csv')
-    X = df[df.columns[:-1]]
-    y = df[df.columns[-1]]
+    results = []
+    for dataset_count, dataset_info in pd.read_csv('datasets/automl_datasets.csv').to_dict('index').items():
+        dataset = dataset_info['Dataset']
+        target = dataset_info['Target']
+        task = dataset_info['Task']
 
-    len_orig_ig = 0
-    nc_val = 0
-    stable_val = 0
-    ensemble_val = 0
+        print '{}. {} ({})'.format(dataset_count + 1, dataset_info['Dataset'], dataset_info['Task'])
+        df = pd.read_csv(
+            '../../data/automl_datasets/{}/{}.csv'.format(dataset_info['Dataset'], dataset_info['Dataset']))
+        df[target] = LabelEncoder().fit_transform(df[target])
 
-    # names = ['KNN', 'LR', 'SVM-L', 'SVM-P', 'RF', 'AB', 'NN', 'DT']
-    # models = [KNeighborsClassifier(), LogisticRegression(), LinearSVC(), SVC(C=1.0, kernel='poly'),
-    #           RandomForestClassifier(n_estimators=100), AdaBoostClassifier(), MLPClassifier(), tree.DecisionTreeClassifier()]
-    # accuracy = {'KNN': 0, 'LR': 0, 'SVM-L': 0, 'SVM-P': 0, 'RF': 0, 'AB': 0, 'NN': 0, 'DT': 0}
-    # f1_scores = {'KNN': 0, 'LR': 0, 'SVM-L': 0, 'SVM-P': 0, 'RF': 0, 'AB': 0, 'NN': 0, 'DT': 0}
+        X = df.drop(target, axis=1)
+        y = df[target]
 
-    names = ['RF']
-    models = [RandomForestClassifier(n_estimators=100)]
-    f1_scores = {'RF': 0}
+        len_orig_ig = 0
+        nc_val = 0
+        stable_val = 0
+        ensemble_val = 0
 
-    for fold, (train_index, test_index) in enumerate(StratifiedKFold(
-            n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE).split(X, y)):
-        fold = fold + 1
-        print 'fold-{}'.format(fold)
-        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-
-        X_train = X_train.as_matrix()
-        X_test = X_test.as_matrix()
-        y_train = y_train.as_matrix()
-        y_test = y_test.as_matrix()
-
-        original_ig(ress=X_train, test=X_test, labels=y_train)
-        original_ig_X_train = pd.read_csv('sonar_original_ig_trainfeatures.csv', header=None).as_matrix()
-        original_ig_X_test = pd.read_csv('sonar_original_ig_testfeatures.csv', header=None).as_matrix()
-
-        dependent(x=original_ig_X_train, th1=0.7, fold=fold)
-        linear(TR=original_ig_X_train, TST=original_ig_X_test, fold=fold)
-        nonlinear(TR=original_ig_X_train, TST=original_ig_X_test, fold=fold)
-
-        try:
-            a1 = pd.read_csv('sonar_related_lineartest_{}.csv'.format(fold), header=None)
-            print 'a1: {}'.format(np.shape(a1))
-        except IOError:
-            a1 = None
-        try:
-            a2 = pd.read_csv('sonar_related_lineartrain_{}.csv'.format(fold), header=None)
-            print 'a2: {}'.format(np.shape(a2))
-        except IOError:
-            a2 = None
-        try:
-            a3 = pd.read_csv('sonar_related_nonlineartest_{}.csv'.format(fold), header=None)
-            print 'a3: {}'.format(np.shape(a3))
-        except IOError:
-            a3 = None
-        try:
-            a4 = pd.read_csv('sonar_related_nonlineartrain_{}.csv'.format(fold), header=None)
-            print 'a4: {}'.format(np.shape(a4))
-        except IOError:
-            a3 = None
-
-        if a1 is None and a2 is None:
-            r4 = a4.values
-            r3 = a3.values
+        if task == 'regression':
+            names = ['GB', 'RF', 'EN']
+            models = [GradientBoostingRegressor(random_state=RANDOM_STATE),
+                      RandomForestRegressor(random_state=RANDOM_STATE), ElasticNet(random_state=RANDOM_STATE)]
+            f1_r2_scores = {'GB': 0, 'RF': 0, 'EN': 0}
+            acc_rmse_scores = {'GB': 0, 'RF': 0, 'EN': 0}
         else:
-            r4 = np.hstack([a2, a4])
-            r3 = np.hstack([a1, a3])
+            names = ['KNN', 'RF', 'NN']
+            models = [KNeighborsClassifier(), RandomForestClassifier(random_state=RANDOM_STATE),
+                      MLPClassifier(random_state=RANDOM_STATE)]
+            f1_r2_scores = {'KNN': 0, 'RF': 0, 'NN': 0}
+            acc_rmse_scores = {'KNN': 0, 'RF': 0, 'NN': 0}
 
-        print 'r4: {}'.format(np.shape(r4))
-        print 'r3: {}'.format(np.shape(r3))
+        categorical_features = list(X.dtypes[X.dtypes == 'object'].index)
+        numerical_features = list(X.dtypes[X.dtypes != 'object'].index)
 
-        scaler = StandardScaler().fit(r4)
-        p2 = scaler.transform(r4)
-        p1 = scaler.transform(r3)
+        if len(X.columns) == len(categorical_features) and len(numerical_features) == 0:
+            result_per_dataset = pd.DataFrame({'Dataset': [dataset] * len(names)})
+            result_per_dataset['ML Model'] = names
+            result_per_dataset['F1/R2: AutoLearn'] = [np.nan] * len(names)
+            result_per_dataset['ACC/RMSE: AutoLearn'] = [np.nan] * len(names)
+            result_per_dataset['Time: AutoLearn (in seconds)'] = [np.nan] * len(names)
+            result_per_dataset['Memory: AutoLearn (in MB)'] = [np.nan] * len(names)
+            results.append(result_per_dataset)
+            pd.concat(results).to_csv('results/autolearn_on_automl_datasets.csv', index=False)
+            print pd.concat(results)[['Dataset', 'ML Model', 'F1/R2: AutoLearn', 'ACC/RMSE: AutoLearn']].reset_index(
+                drop=True)
+            clean()
+            continue
 
-        stable(ress=p2, test=p1, labels=y_train)
+        X = X.drop(categorical_features, axis=1)
 
-        f1 = pd.read_csv('sonar_ensemble_trainfeatures.csv', header=None)
-        f2 = pd.read_csv('sonar_ensemble_testfeatures.csv', header=None)
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(TIMEOUT)
+        try:
+            start_time_per_fold = time.time()
+            memory_before_per_fold = psutil.Process().memory_info().rss
+            for fold, (train_index, test_index) in enumerate(
+                    StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE).split(X, y)):
+                fold = fold + 1
+                print '{} fold-{}'.format(dataset, fold)
+                X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+                y_train, y_test = y.iloc[train_index], y.iloc[test_index]
 
-        scaler = StandardScaler().fit(f1)
-        e_f1 = scaler.transform(f1)
-        e_f2 = scaler.transform(f2)
+                X_train = X_train.as_matrix()
+                X_test = X_test.as_matrix()
+                y_train = y_train.as_matrix()
+                y_test = y_test.as_matrix()
 
-        x1X = np.hstack(
-            [X_test, f2])  # original test features, selected by IG, f2 is feature space after ensemble selection.
-        x2X = np.hstack([X_train, f1])
+                original_ig(ress=X_train, test=X_test, labels=y_train)
+                original_ig_X_train = pd.read_csv('sonar_original_ig_trainfeatures.csv', header=None).as_matrix()
+                original_ig_X_test = pd.read_csv('sonar_original_ig_testfeatures.csv', header=None).as_matrix()
 
-        scaler = StandardScaler().fit(x2X)  # Again normalization of the complete combined feature pool
-        x2 = scaler.transform(x2X)  # note - when features need to be merged with R2R, we need to do normalization.
-        x1 = scaler.transform(x1X)
+                dependent(x=original_ig_X_train, th1=0.7, fold=fold)
+                linear(TR=original_ig_X_train, TST=original_ig_X_test, fold=fold)
+                nonlinear(TR=original_ig_X_train, TST=original_ig_X_test, fold=fold)
 
-        """
-        y1Y = np.hstack([X_test, f2])
-        y2Y = np.hstack([X_train, f1])
+                try:
+                    a1 = pd.read_csv('sonar_related_lineartest_{}.csv'.format(fold), header=None)
+                except IOError:
+                    a1 = None
+                try:
+                    a2 = pd.read_csv('sonar_related_lineartrain_{}.csv'.format(fold), header=None)
+                except IOError:
+                    a2 = None
+                try:
+                    a3 = pd.read_csv('sonar_related_nonlineartest_{}.csv'.format(fold), header=None)
+                except IOError:
+                    a3 = None
+                try:
+                    a4 = pd.read_csv('sonar_related_nonlineartrain_{}.csv'.format(fold), header=None)
+                except IOError:
+                    a4 = None
 
-        scaler = StandardScaler().fit(y2Y)  # Again normalization of the complete combined feature pool
-        y2 = scaler.transform(y2Y)  # note - when features need to be merged with R2R, we need to do normalization.
-        y1 = scaler.transform(y1Y)
+                if a1 is None and a2 is None:
+                    r4 = a4.values
+                    r3 = a3.values
+                elif a3 is None and a4 is None:
+                    r4 = a2.values
+                    r3 = a1.values
+                else:
+                    r4 = np.hstack([a2, a4])
+                    r3 = np.hstack([a1, a3])
 
-        st_f1 = pd.read_csv('sonar_stable_trainfeatures.csv', header=None)
-        st_f2 = pd.read_csv('sonar_stable_testfeatures.csv', header=None)
+                """
+                print 'r4: {}'.format(np.shape(r4))
+                print 'r3: {}'.format(np.shape(r3))
+                """
 
-        st_x1X = np.hstack([original_ig_X_test,
-                            st_f2])  # original test features, selected by IG, f2 is feature space after stability selection.
-        st_x2X = np.hstack([original_ig_X_train, st_f1])
+                scaler = StandardScaler().fit(r4)
+                p2 = scaler.transform(r4)
+                p1 = scaler.transform(r3)
 
-        scaler = StandardScaler().fit(st_x2X)  # Again normalization of the complete combined feature pool
-        st_x2 = scaler.transform(
-            st_x2X)  # note - when features need to be merged with R2R, we need to do normalization.
-        st_x1 = scaler.transform(st_x1X)
-        """
+                stable(ress=p2, test=p1, labels=y_train)
 
-        for i in range(0, len(models)):
-            models[i].fit(x2, y_train)
-            y_out = models[i].predict(x1)
-            f1 = f1_score(y_true=y_test, y_pred=y_out)
-            print '{}: {}'.format(names[i], f1)
-            f1_scores[names[i]] += f1
-            # acc = models[i].score(x1, y_test)
-            # accuracy[names[i]] += acc
+                f1 = pd.read_csv('sonar_ensemble_trainfeatures.csv', header=None)
+                f2 = pd.read_csv('sonar_ensemble_testfeatures.csv', header=None)
 
-        rank(x2, y_train)
+                scaler = StandardScaler().fit(f1)
+                e_f1 = scaler.transform(f1)
+                e_f2 = scaler.transform(f2)
 
-        print 'fold-{} done.'.format(fold)
-        print '{}'.format('_' * 80)
+                x1X = np.hstack(
+                    [X_test,
+                     f2])  # original test features, selected by IG, f2 is feature space after ensemble selection.
+                x2X = np.hstack([X_train, f1])
 
-    # accuracy = {k: v / N_FOLDS for k, v in accuracy.items()}
-    # print accuracy
-    f1_scores = {k: v / N_FOLDS for k, v in f1_scores.items()}
-    print f1_scores
-    clean()
+                scaler = StandardScaler().fit(x2X)  # Again normalization of the complete combined feature pool
+                x2 = scaler.transform(
+                    x2X)  # note - when features need to be merged with R2R, we need to do normalization.
+                x1 = scaler.transform(x1X)
 
-# TODO: 1. measure accuracy
-# 2. use same models as kgfarm
-# 3. save results as dataframes
-# 4. test and drop categorical features
+                y1Y = np.hstack([X_test, f2])
+                y2Y = np.hstack([X_train, f1])
+
+                scaler = StandardScaler().fit(y2Y)  # Again normalization of the complete combined feature pool
+                y2 = scaler.transform(
+                    y2Y)  # note - when features need to be merged with R2R, we need to do normalization.
+                y1 = scaler.transform(y1Y)
+
+                """
+                st_f1 = pd.read_csv('sonar_stable_trainfeatures.csv', header=None)
+                st_f2 = pd.read_csv('sonar_stable_testfeatures.csv', header=None)
+        
+                st_x1X = np.hstack([original_ig_X_test,
+                                    st_f2])  # original test features, selected by IG, f2 is feature space after stability selection.
+                st_x2X = np.hstack([original_ig_X_train, st_f1])
+        
+                scaler = StandardScaler().fit(st_x2X)  # Again normalization of the complete combined feature pool
+                st_x2 = scaler.transform(
+                    st_x2X)  # note - when features need to be merged with R2R, we need to do normalization.
+                st_x1 = scaler.transform(st_x1X)
+                """
+
+                if task == 'regression':
+                    print 'Calculating R2 and RMSE'
+                    for i in range(0, len(models)):
+                        models[i].fit(x2, y_train)
+                        y_out = models[i].predict(x1)
+                        r2 = r2_score(y_true=y_test, y_pred=y_out)
+                        rmse = np.sqrt(mean_squared_error(y_true=y_test, y_pred=y_out))
+                        f1_r2_scores[names[i]] += r2
+                        acc_rmse_scores[names[i]] += rmse
+
+                else:
+                    print 'Calculating F1 and Accuracy'
+                    for i in range(0, len(models)):
+                        models[i].fit(x2, y_train)
+                        y_out = models[i].predict(x1)
+                        f1 = f1_score(y_true=y_test, y_pred=y_out)
+                        accuracy = models[i].score(X=x1, y=y_test)
+                        f1_r2_scores[names[i]] += f1
+                        acc_rmse_scores[names[i]] += accuracy
+
+                print 'fold-{} done.'.format(fold)
+                print '{}'.format('_' * 80)
+
+        except TimeoutException as exception:
+            print(exception)
+            result_per_dataset = pd.DataFrame({'Dataset': [dataset] * len(names)})
+            result_per_dataset['ML Model'] = names
+            result_per_dataset['F1/R2: AutoLearn'] = [np.nan] * len(names)
+            result_per_dataset['ACC/RMSE: AutoLearn'] = [np.nan] * len(names)
+            result_per_dataset['Time: AutoLearn (in seconds)'] = [np.nan] * len(names)
+            result_per_dataset['Memory: AutoLearn (in MB)'] = [np.nan] * len(names)
+            results.append(result_per_dataset)
+            pd.concat(results).to_csv('results/autolearn_on_automl_datasets.csv', index=False)
+            print pd.concat(results)[['Dataset', 'ML Model', 'F1/R2: AutoLearn', 'ACC/RMSE: AutoLearn']].reset_index(
+                drop=True)
+            clean()
+            continue
+
+        time_taken = '{:.2f}'.format(time.time() - start_time_per_fold)
+        memory_usage = '{:.2f}'.format(abs(psutil.Process().memory_info().rss - memory_before_per_fold) / (1024 * 1024))
+
+        f1_r2_scores = {k: '{:.2f}'.format(v * 100 / N_FOLDS) for k, v in f1_r2_scores.items()}
+        acc_rmse_scores = {k: '{:.2f}'.format(v * 100 / N_FOLDS) for k, v in acc_rmse_scores.items()}
+
+        result_per_dataset = pd.DataFrame({'Dataset': [dataset] * len(names)})
+        result_per_dataset['ML Model'] = names
+        result_per_dataset['F1/R2: AutoLearn'] = f1_r2_scores.values()
+        result_per_dataset['ACC/RMSE: AutoLearn'] = acc_rmse_scores.values()
+        result_per_dataset['Time: AutoLearn (in seconds)'] = time_taken
+        result_per_dataset['Memory: AutoLearn (in MB)'] = memory_usage
+        results.append(result_per_dataset)
+        pd.concat(results).to_csv('results/autolearn_on_automl_datasets.csv', index=False)
+        print pd.concat(results)[['Dataset', 'ML Model', 'F1/R2: AutoLearn', 'ACC/RMSE: AutoLearn']].reset_index(
+            drop=True)
+        clean()

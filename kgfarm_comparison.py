@@ -446,20 +446,19 @@ if __name__ == '__main__':
                 except IOError:
                     a4 = None
 
-                if a1 is None and a2 is None:
-                    r4 = a4.values
-                    r3 = a3.values
-                elif a3 is None and a4 is None:
-                    r4 = a2.values
-                    r3 = a1.values
-                else:
-                    r4 = np.hstack([a2, a4])
-                    r3 = np.hstack([a1, a3])
+                try:
+                    if a1 is None and a2 is None:
+                        r4 = a4.values
+                        r3 = a3.values
+                    elif a3 is None and a4 is None:
+                        r4 = a2.values
+                        r3 = a1.values
+                    else:
+                        r4 = np.hstack([a2, a4])
+                        r3 = np.hstack([a1, a3])
 
-                """
-                print 'r4: {}'.format(np.shape(r4))
-                print 'r3: {}'.format(np.shape(r3))
-                """
+                except AttributeError as exception:
+                    break
 
                 scaler = StandardScaler().fit(r4)
                 p2 = scaler.transform(r4)
@@ -552,10 +551,18 @@ if __name__ == '__main__':
 
         result_per_dataset = pd.DataFrame({'Dataset': [dataset] * len(names)})
         result_per_dataset['ML Model'] = names
-        result_per_dataset['F1/R2: AutoLearn'] = f1_r2_scores.values()
-        result_per_dataset['ACC/RMSE: AutoLearn'] = acc_rmse_scores.values()
-        result_per_dataset['Time: AutoLearn (in seconds)'] = time_taken
-        result_per_dataset['Memory: AutoLearn (in MB)'] = memory_usage
+
+        if list(f1_r2_scores.values()) == ['0.00'] * 3 and (acc_rmse_scores.values()) == ['0.00'] * 3:
+            result_per_dataset['F1/R2: AutoLearn'] = ['error'] * len(names)
+            result_per_dataset['ACC/RMSE: AutoLearn'] =['error'] * len(names)
+            result_per_dataset['Time: AutoLearn (in seconds)'] = ['error'] * len(names)
+            result_per_dataset['Memory: AutoLearn (in MB)'] = ['error'] * len(names)
+        else:
+            result_per_dataset['F1/R2: AutoLearn'] = f1_r2_scores.values()
+            result_per_dataset['ACC/RMSE: AutoLearn'] = acc_rmse_scores.values()
+            result_per_dataset['Time: AutoLearn (in seconds)'] = time_taken
+            result_per_dataset['Memory: AutoLearn (in MB)'] = memory_usage
+
         results.append(result_per_dataset)
         pd.concat(results).to_csv('results/autolearn_on_automl_datasets.csv', index=False)
         print pd.concat(results)[['Dataset', 'ML Model', 'F1/R2: AutoLearn', 'ACC/RMSE: AutoLearn']].reset_index(

@@ -517,10 +517,16 @@ if __name__ == '__main__':
 
                 else:
                     print 'Calculating F1 and Accuracy'
+
+                    if task == 'binary':
+                        f1_type = 'binary'
+                    else:
+                        f1_type = 'weighted'
+
                     for i in range(0, len(models)):
                         models[i].fit(x2, y_train)
                         y_out = models[i].predict(x1)
-                        f1 = f1_score(y_true=y_test, y_pred=y_out)
+                        f1 = f1_score(y_true=y_test, y_pred=y_out, average=f1_type)
                         accuracy = models[i].score(X=x1, y=y_test)
                         f1_r2_scores[names[i]] += f1
                         acc_rmse_scores[names[i]] += accuracy

@@ -10,8 +10,8 @@ from scipy.stats.stats import pearsonr
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import StratifiedKFold
 from scipy.spatial.distance import squareform, pdist
+from sklearn.model_selection import StratifiedKFold, KFold
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import f1_score, r2_score, mean_squared_error
 from sklearn.linear_model import Ridge, RandomizedLasso, ElasticNet
@@ -378,12 +378,15 @@ if __name__ == '__main__':
                       RandomForestRegressor(random_state=RANDOM_STATE), ElasticNet(random_state=RANDOM_STATE)]
             f1_r2_scores = {'GB': 0, 'RF': 0, 'EN': 0}
             acc_rmse_scores = {'GB': 0, 'RF': 0, 'EN': 0}
+            folds = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+
         else:
             names = ['KNN', 'RF', 'NN']
             models = [KNeighborsClassifier(), RandomForestClassifier(random_state=RANDOM_STATE),
                       MLPClassifier(random_state=RANDOM_STATE)]
             f1_r2_scores = {'KNN': 0, 'RF': 0, 'NN': 0}
             acc_rmse_scores = {'KNN': 0, 'RF': 0, 'NN': 0}
+            folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
 
         categorical_features = list(X.dtypes[X.dtypes == 'object'].index)
         numerical_features = list(X.dtypes[X.dtypes != 'object'].index)
@@ -409,8 +412,8 @@ if __name__ == '__main__':
         try:
             start_time_per_fold = time.time()
             memory_before_per_fold = psutil.Process().memory_info().rss
-            for fold, (train_index, test_index) in enumerate(
-                    StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE).split(X, y)):
+
+            for fold, (train_index, test_index) in enumerate(folds.split(X, y)):
                 fold = fold + 1
                 print '{} fold-{}'.format(dataset, fold)
                 X_train, X_test = X.iloc[train_index], X.iloc[test_index]
